@@ -107,8 +107,55 @@ def retrieve_for_case(
       * Keep user_id and thread_id from the loaded case.
       * Finish with memory.assemble_context(layers).
     """
-    _ = (memory, case, extra_messages, settings, ShortTermMemory)
-    raise NotImplementedError("BONUS TODO: run student retrieval for the loaded case")
+    short_term = ""
+    # Retrieve short-term memory if expected or "mixed"
+    expected = case.get("expected_layer", "")
+    layers_needed = case.get("retrieve_layers", [expected]) if expected == "mixed" else [expected]
+    
+    stm = ShortTermMemory(strategy="sliding", max_recent_messages=4, pressure_tokens=300)
+    
+    # Add fixture messages if present
+    for msg in case.get("fixture_messages", []):
+        stm.add(msg["role"], msg["content"])
+    
+    # If no fixture messages but thread_id exists, we could fetch them from sessions.json.
+    # We will assume extra_messages handles the ongoing chat.
+    for msg in extra_messages:
+        stm.add(msg["role"], msg["content"])
+        
+    short_term = stm.render()
+
+    layers_dict = {"short_term": short_term}
+
+    user_id = case.get("user_id")
+    thread_id = case.get("thread_id")
+    query = case.get("query", "")
+    
+    if "long_term" in layers_needed or "mixed" in layers_needed or expected == "mixed":
+        try:
+            layers_dict["long_term"] = memory.retrieve_long_term(user_id, thread_id, query)
+        except Exception:
+            pass
+
+    if "episodic" in layers_needed or "mixed" in layers_needed or expected == "mixed":
+        try:
+            layers_dict["episodic"] = memory.retrieve_episodic(user_id, query)
+        except Exception:
+            pass
+
+    if "semantic" in layers_needed or "mixed" in layers_needed or expected == "mixed":
+        try:
+            layers_dict["semantic"] = memory.retrieve_semantic(settings.zep_semantic_graph_id, query)
+        except Exception:
+            pass
+
+    merged_context, budget_breakdown = memory.assemble_context(layers_dict)
+    
+    return {
+        "merged_context": merged_context,
+        "layers": layers_dict,
+        "budget": budget_breakdown,
+    }
 
 
 def main() -> None:
